@@ -21,10 +21,6 @@ impl Connection {
     pub async fn read_message(&mut self) -> anyhow::Result<Message> {
         self.reader.read_message().await
     }
-    pub async fn write_text(&mut self, text: &str) -> anyhow::Result<&mut Self> {
-        self.writer.write_text(text).await?;
-        Ok(self)
-    }
     pub async fn write_message(&mut self, message: Message) -> anyhow::Result<&mut Self> {
         self.writer.write_message(message).await?;
         Ok(self)
@@ -44,7 +40,7 @@ impl ReaderConnection {
     }
     pub async fn read_message(&mut self) -> anyhow::Result<Message> {
         let mut size_buf = [0; 8];
-        match self.reader.read_exact(&mut size_buf).await {
+        let result = match self.reader.read_exact(&mut size_buf).await {
             Ok(0) => Ok(Message::Close(Some(message::CloseFrame {
                 code: message::CloseCode::Normal,
                 reason: "Disconnect with fetch size 0".into(),
@@ -59,7 +55,14 @@ impl ReaderConnection {
                     }))),
                     Ok(_n) => {
                         let text = String::from_utf8_lossy(&data_buf[..]);
-                        Ok(Message::Text(text.into()))
+                        match text.as_ref() {
+                            "ping" => Ok(Message::Ping),
+                            "pong" => Ok(Message::Pong),
+                            _ => {
+                                let json = serde_json::json!(text);
+                                Ok(Message::Json(json))
+                            }
+                        }
                     }
                     // 非预期错误
                     Err(e) => Err(e.into()),
@@ -67,7 +70,12 @@ impl ReaderConnection {
             }
             // 非预期错误
             Err(e) => Err(e.into()),
+        };
+        // debug
+        if let Ok(ref result) = result {
+            log::debug!("recv msg: {:?}", result);
         }
+        result
     }
 }
 
@@ -79,15 +87,22 @@ impl WriterConnection {
     fn new(writer: io::WriteHalf<TcpStream>) -> Self {
         Self { writer }
     }
-    pub async fn write_text(&mut self, text: &str) -> anyhow::Result<&mut Self> {
-        self.write_message(Message::Text(text.to_string())).await
-    }
     pub async fn write_message(&mut self, message: Message) -> anyhow::Result<&mut Self> {
+        let text;
         let mut bytes: Option<&[u8]> = None;
         match message {
-            Message::Text(ref text) => {
+            Message::Json(ref json) => {
+                text = serde_json::to_string(json)?;
                 bytes = Some(text.as_bytes());
-            }
+            },
+            Message::Ping => {
+                text = "ping".into();
+                bytes = Some(text.as_bytes());
+            },
+            Message::Pong => {
+                text = "pong".into();
+                bytes = Some(text.as_bytes());
+            },
             _ => (),
         }
 
@@ -97,6 +112,24 @@ impl WriterConnection {
             self.writer.write_all(&final_bytes).await?;
         }
         Ok(self)
+    }
+    pub async fn reply_message(&mut self, recv_message: Message, reply_message: Message) -> anyhow::Result<&mut Self> {
+      match recv_message {
+        Message::Json(recv_json) => {
+          match reply_message {
+            Message::Json(reply_json) => {
+                let mut map = serde_json::map::Map::new();
+                map.insert("recv".into(), recv_json);
+                map.insert("reply".into(), reply_json);
+                let final_reply_json = serde_json::Value::Object(map);
+                return self.write_message(Message::Json(final_reply_json)).await
+            },
+            _ => ()
+          }
+        },
+        _ => ()
+      }
+      Ok(self)
     }
     pub async fn close(&mut self) -> anyhow::Result<()> {
         Ok(self.writer.shutdown().await?)

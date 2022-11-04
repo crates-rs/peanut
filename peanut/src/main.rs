@@ -1,7 +1,7 @@
-mod client;
 mod connection;
 mod message;
 mod server;
+mod client;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -27,6 +27,14 @@ enum Commands {
         port: u16,
     },
     Stop, // cargo run -p peanut stop
+    Connect {
+        // cargo run -p peanut connect --port 3333
+        #[clap(name = "hostname", long, default_value = "127.0.0.1")]
+        host: String,
+        /// 端口
+        #[arg(short, long, default_value_t = 6379)]
+        port: u16,
+    }
 }
 
 #[tokio::main]
@@ -40,7 +48,11 @@ async fn main() -> anyhow::Result<()> {
             let addr = format!("{}:{}", host, port);
             server::start_server(addr).await?;
         },
-        Commands::Stop => {}
+        Commands::Stop => {},
+        Commands::Connect {host, port} => {
+            let addr = format!("{}:{}", host, port);
+            client::connect_server(addr).await?;
+        },
     }
 
     Ok(())

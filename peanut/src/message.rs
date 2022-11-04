@@ -1,6 +1,8 @@
 #[derive(Debug)]
 pub enum Message {
-    Text(String),
+    Ping,
+    Pong,
+    Json(serde_json::Value),
     Close(Option<CloseFrame>),
 }
 
